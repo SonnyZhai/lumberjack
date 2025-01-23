@@ -3,7 +3,7 @@
 // Note that this is v2.0 of lumberjack, and should be imported using gopkg.in
 // thusly:
 //
-//   import "gopkg.in/natefinch/lumberjack.v2"
+//	import "gopkg.in/natefinch/lumberjack.v2"
 //
 // The package name remains simply lumberjack, and the code resides at
 // https://github.com/natefinch/lumberjack under the v2.0 branch.
@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,7 +65,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to the encoded timestamp will be retained, up to a
@@ -254,8 +253,10 @@ func backupName(name string, local bool) string {
 		t = t.UTC()
 	}
 
-	timestamp := t.Format(backupTimeFormat)
-	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
+	// 把“刚写完的文件”当做“昨天”那一天的日志。
+	dateStr := t.Add(-24 * time.Hour).Format("2006-01-02")
+
+	return filepath.Join(dir, fmt.Sprintf("%s_%s%s", prefix, dateStr, ext))
 }
 
 // openExistingOrNew opens the logfile if it exists and if the current write
@@ -398,7 +399,7 @@ func (l *Logger) mill() {
 // oldLogFiles returns the list of backup log files stored in the same
 // directory as the current log file, sorted by ModTime
 func (l *Logger) oldLogFiles() ([]logInfo, error) {
-	files, err := ioutil.ReadDir(l.dir())
+	files, err := os.ReadDir(l.dir())
 	if err != nil {
 		return nil, fmt.Errorf("can't read log file directory: %s", err)
 	}
@@ -407,15 +408,18 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 	prefix, ext := l.prefixAndExt()
 
 	for _, f := range files {
-		if f.IsDir() {
-			continue
+		info, err := f.Info()
+		if err != nil {
+			return nil, fmt.Errorf("can't get info for log file: %s", err)
 		}
+		// parse "app_YYYY-MM-DD.log"
 		if t, err := l.timeFromName(f.Name(), prefix, ext); err == nil {
-			logFiles = append(logFiles, logInfo{t, f})
+			logFiles = append(logFiles, logInfo{t, info})
 			continue
 		}
+		// parse "app_YYYY-MM-DD.log.gz" (compressed)
 		if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
-			logFiles = append(logFiles, logInfo{t, f})
+			logFiles = append(logFiles, logInfo{t, info})
 			continue
 		}
 		// error parsing means that the suffix at the end was not generated
@@ -431,14 +435,22 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 // the filename's prefix and extension. This prevents someone's filename from
 // confusing time.parse.
 func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
+	// prefix check
 	if !strings.HasPrefix(filename, prefix) {
 		return time.Time{}, errors.New("mismatched prefix")
 	}
+	// suffix check
 	if !strings.HasSuffix(filename, ext) {
 		return time.Time{}, errors.New("mismatched extension")
 	}
-	ts := filename[len(prefix) : len(filename)-len(ext)]
-	return time.Parse(backupTimeFormat, ts)
+	// date check YYYY-MM-DD
+	// dateStr = "2023-01-01"
+	dateStr := filename[len(prefix) : len(filename)-len(ext)]
+	t, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
 }
 
 // max returns the maximum size in bytes of log files before rolling.
@@ -459,7 +471,7 @@ func (l *Logger) dir() string {
 func (l *Logger) prefixAndExt() (prefix, ext string) {
 	filename := filepath.Base(l.filename())
 	ext = filepath.Ext(filename)
-	prefix = filename[:len(filename)-len(ext)] + "-"
+	prefix = filename[:len(filename)-len(ext)] + "_"
 	return prefix, ext
 }
 
